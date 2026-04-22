@@ -6,14 +6,10 @@ on:
       ota_url:
         description: 'Direct Download URL for the Firmware zip'
         required: true
-      downloader:
-        description: 'Choose download method'
+      cookies:
+        description: 'Paste your browser cookie string here (Handle with care!)'
         required: true
-        default: 'aria2'
-        type: choice
-        options:
-          - aria2
-          - curl
+        type: string
 
 jobs:
   extract-and-upload:
@@ -25,34 +21,31 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y unzip jq aria2 zip file
+          sudo apt-get install -y unzip jq curl file
 
       - name: Process Firmware
         run: |
           mkdir -p workspace/extracted_images
           cd workspace
           
-          # Download with spoofed headers to prevent 403 errors
-          if [ "${{ github.event.inputs.downloader }}" == "aria2" ]; then
-            echo "Downloading with aria2..."
-            aria2c -x 16 -s 16 \
-              --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" \
-              --referer="https://www.needrom.com/" \
-              -o ota_package.zip "${{ github.event.inputs.ota_url }}"
-          else
-            echo "Downloading with curl..."
-            curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" \
-              -e "https://www.needrom.com/" \
-              -o ota_package.zip "${{ github.event.inputs.ota_url }}"
-          fi
+          # Use the cookie string provided in the input field
+          COOKIE_VAL="${{ github.event.inputs.cookies }}"
+          
+          echo "Downloading with authenticated curl..."
+          curl -L "${{ github.event.inputs.ota_url }}" \
+            -H "accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8" \
+            -H "accept-language: en-US,en;q=0.9" \
+            -H "cache-control: max-age=0" \
+            -b "$COOKIE_VAL" \
+            -H "referer: https://www.needrom.com/" \
+            -H "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/147.0.0.0" \
+            -o ota_package.zip
 
-          # Validation Step: Ensure it is a real ZIP file
+          # Validation Step
           echo "Checking if file is a valid ZIP..."
           if ! file ota_package.zip | grep -q "Zip archive"; then
-            echo "::error:: The downloaded file is not a valid ZIP archive."
-            echo "File type detected:"
-            file ota_package.zip
-            echo "--- Preview of first 10 lines of the file (might be HTML/CAPTCHA): ---"
+            echo "::error:: Download failed. The session likely expired or the IP address was rejected."
+            echo "--- File Preview (Error Page) ---"
             head -n 10 ota_package.zip
             exit 1
           fi
@@ -63,27 +56,19 @@ jobs:
           echo "Searching for images..."
           find . -type f \( -name "boot.img" -o -name "init_boot.img" -o -name "vbmeta.img" \) -exec cp {} extracted_images/ \;
           
-          # Check if we actually found files
           if [ -z "$(ls -A extracted_images)" ]; then
-            echo "Error: Required images (boot, init_boot, vbmeta) not found in the OTA zip."
+            echo "Error: Required images not found."
             exit 1
           fi
 
       - name: Zip and Upload
         run: |
-          # Zip the images from the folder
           zip -j output_package.zip workspace/extracted_images/*.img
-          
-          # Get available server
           SERVER_RESPONSE=$(curl -s https://api.gofile.io/servers)
           SERVER=$(echo $SERVER_RESPONSE | jq -r '.data.servers[0].name')
           
           echo "Uploading package to: $SERVER"
-          
-          # Upload the single zip file
           UPLOAD_RESPONSE=$(curl -s -F file=@output_package.zip "https://$SERVER.gofile.io/contents/uploadFile")
-          
-          # Extract and print the link
           DOWNLOAD_LINK=$(echo $UPLOAD_RESPONSE | jq -r '.data.downloadPage')
           
           echo "✅ Success: output_package.zip uploaded."
