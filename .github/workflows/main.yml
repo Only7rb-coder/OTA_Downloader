@@ -51,7 +51,7 @@ jobs:
           
           if [ -f "$PAYLOAD_PATH" ]; then
             echo "Dumping images..."
-            payload_dumper --out ./extracted_images --partitions boot,init_boot "$PAYLOAD_PATH"
+            payload_dumper --out ./extracted_images --partitions boot,vbmeta,init_boot "$PAYLOAD_PATH"
           else
             echo "Error: payload.bin not found."
             exit 1
