@@ -1,0 +1,99 @@
+name: Auto ROM Processor
+on:
+  workflow_dispatch:
+    inputs:
+      username:
+        description: 'Needrom Username'
+        required: true
+        type: string
+      password:
+        description: 'Needrom Password'
+        required: true
+        type: string
+      page_url:
+        description: 'Needrom ROM Page URL'
+        required: true
+        type: string
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Process ROM
+        env:
+          NEEDROM_USER: ${{ inputs.username }}
+          NEEDROM_PASS: ${{ inputs.password }}
+          ROM_PAGE_URL: ${{ inputs.page_url }}
+        run: |
+          python3 -c "
+          import os, requests, zipfile, io, sys
+          from bs4 import BeautifulSoup
+          
+          # Setup Session
+          session = requests.Session()
+          session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+          
+          # Login
+          print('Logging into Needrom...')
+          login_data = {
+              'log': os.getenv('NEEDROM_USER'), 
+              'pwd': os.getenv('NEEDROM_PASS'), 
+              'wp-submit': 'Log In', 
+              'rememberme': 'forever'
+          }
+          session.post('https://www.needrom.com/wp-login.php', data=login_data)
+          
+          # Fetch Page
+          print(f'Fetching: {os.getenv('ROM_PAGE_URL')}')
+          page = session.get(os.getenv('ROM_PAGE_URL'))
+          soup = BeautifulSoup(page.text, 'html.parser')
+          
+          # Search for download link
+          download_link = None
+          for a in soup.find_all('a', href=True):
+              if 'download' in a['href'] or 'dl.php' in a['href']:
+                  download_link = a['href']
+                  break
+          
+          if not download_link:
+              print('Error: Could not find download link.')
+              sys.exit(1)
+              
+          print(f'Downloading from: {download_link}')
+          r = session.get(download_link, stream=True)
+          
+          # Extraction and Filter
+          target_files = ['init_boot', 'boot', 'vbmeta']
+          extracted_files = []
+          
+          with zipfile.ZipFile(io.BytesIO(r.content)) as zip_ref:
+              for file in zip_ref.namelist():
+                  # Check if filename contains any target (case-insensitive)
+                  if any(x in file.lower() for x in target_files):
+                      zip_ref.extract(file)
+                      extracted_files.append(file)
+                      print(f'Extracted: {file}')
+          
+          # Upload to Gofile (Direct Upload)
+          print('Uploading to Gofile...')
+          upload_url = 'https://api.gofile.io/uploadFile'
+          
+          for f in extracted_files:
+              if os.path.exists(f):
+                  with open(f, 'rb') as file_obj:
+                      # Key MUST be 'filesUploaded' for Gofile API
+                      files = {'filesUploaded': (f, file_obj)}
+                      resp = requests.post(upload_url, files=files)
+                      
+                      try:
+                          result = resp.json()
+                          if result.get('status') == 'ok':
+                              print(f\"Uploaded {f}: {result['data']['downloadPage']}\")
+                          else:
+                              print(f\"Upload failed for {f}: {result}\")
+                      except Exception as e:
+                          print(f\"Failed to parse Gofile response: {e}\")
+          "
