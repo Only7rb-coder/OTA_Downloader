@@ -6,12 +6,19 @@ on:
       ota_url:
         description: 'Direct Download URL for the OTA zip'
         required: true
+      downloader:
+        description: 'Choose download method'
+        required: true
+        default: 'aria2'
+        type: choice
+        options:
+          - aria2
+          - curl
 
 jobs:
   extract-and-upload:
     runs-on: ubuntu-latest
     env:
-      # Silences deprecation warnings
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout repository
@@ -20,7 +27,6 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          # Installed aria2 for fast multi-threaded downloads
           sudo apt-get install -y python3-pip unzip jq aria2
           pip3 install payload-dumper
 
@@ -29,9 +35,14 @@ jobs:
           mkdir -p workspace/extracted_images
           cd workspace
           
-          echo "Downloading with aria2 (multi-threaded)..."
-          # -x 16: Max connections per server, -s 16: Split file into 16 parts
-          aria2c -x 16 -s 16 -o ota_package.zip "${{ github.event.inputs.ota_url }}"
+          # Conditional download logic
+          if [ "${{ github.event.inputs.downloader }}" == "aria2" ]; then
+            echo "Downloading with aria2 (multi-threaded)..."
+            aria2c -x 16 -s 16 -o ota_package.zip "${{ github.event.inputs.ota_url }}"
+          else
+            echo "Downloading with curl (standard)..."
+            curl -L -o ota_package.zip "${{ github.event.inputs.ota_url }}"
+          fi
           
           echo "Unzipping..."
           unzip -o ota_package.zip
@@ -59,13 +70,9 @@ jobs:
             if [ -f "$file" ]; then
               echo "Uploading $(basename "$file")..."
               
-              # Upload to the selected server
               UPLOAD_RESPONSE=$(curl -s -F file=@"$file" "https://$SERVER.gofile.io/contents/uploadFile")
-              
-              # Extract the link
               DOWNLOAD_LINK=$(echo $UPLOAD_RESPONSE | jq -r '.data.downloadPage')
               
-              # Output result
               echo "✅ Success: $(basename "$file")"
               echo "Link: $DOWNLOAD_LINK"
             fi
