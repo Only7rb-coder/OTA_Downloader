@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Install Dependencies
-        run: pip install requests beautifulsoup4
+        run: pip install cloudscraper beautifulsoup4 requests
 
       - name: Process ROM
         env:
@@ -29,29 +29,44 @@ jobs:
           ROM_PAGE_URL: ${{ inputs.page_url }}
         run: |
           python3 -c "
-          import os, requests, zipfile, io, sys
+          import os, sys, cloudscraper, zipfile, io, time
           from bs4 import BeautifulSoup
+          import requests
           
-          # Setup Session
-          session = requests.Session()
-          session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+          # Initialize CloudScraper to bypass WAF/Cloudflare
+          scraper = cloudscraper.create_scraper()
           
-          # Login
+          # 1. GET login page to retrieve the nonce
+          print('Fetching login page to retrieve security token...')
+          login_page = scraper.get('https://www.needrom.com/wp-login.php')
+          soup = BeautifulSoup(login_page.text, 'html.parser')
+          
+          nonce_input = soup.find('input', {'name': '_wpnonce'})
+          if not nonce_input:
+              print('Error: Could not find security token (_wpnonce).')
+              sys.exit(1)
+          
+          wp_nonce = nonce_input['value']
+          
+          # 2. Login
           print('Logging into Needrom...')
           login_data = {
               'log': os.getenv('NEEDROM_USER'), 
               'pwd': os.getenv('NEEDROM_PASS'), 
               'wp-submit': 'Log In', 
+              'redirect_to': 'https://www.needrom.com/',
+              '_wpnonce': wp_nonce,
+              '_wp_http_referer': '/wp-login.php',
               'rememberme': 'forever'
           }
-          session.post('https://www.needrom.com/wp-login.php', data=login_data)
+          resp = scraper.post('https://www.needrom.com/wp-login.php', data=login_data)
           
-          # Fetch Page
+          # 3. Fetch ROM Page
           print(f'Fetching: {os.getenv('ROM_PAGE_URL')}')
-          page = session.get(os.getenv('ROM_PAGE_URL'))
+          page = scraper.get(os.getenv('ROM_PAGE_URL'))
           soup = BeautifulSoup(page.text, 'html.parser')
           
-          # Search for download link
+          # 4. Find download link
           download_link = None
           for a in soup.find_all('a', href=True):
               if 'download' in a['href'] or 'dl.php' in a['href']:
@@ -63,33 +78,32 @@ jobs:
               sys.exit(1)
               
           print(f'Downloading from: {download_link}')
-          r = session.get(download_link, stream=True)
+          # Use stream=True to handle large files
+          r = scraper.get(download_link, stream=True)
           
-          # Extraction and Filter
+          # 5. Extract specific files
           target_files = ['init_boot', 'boot', 'vbmeta']
           extracted_files = []
           
           with zipfile.ZipFile(io.BytesIO(r.content)) as zip_ref:
               for file in zip_ref.namelist():
-                  # Check if filename contains any target (case-insensitive)
                   if any(x in file.lower() for x in target_files):
                       zip_ref.extract(file)
                       extracted_files.append(file)
                       print(f'Extracted: {file}')
           
-          # Upload to Gofile (Direct Upload)
+          # 6. Upload to Gofile
           print('Uploading to Gofile...')
           upload_url = 'https://api.gofile.io/uploadFile'
           
           for f in extracted_files:
               if os.path.exists(f):
                   with open(f, 'rb') as file_obj:
-                      # Key MUST be 'filesUploaded' for Gofile API
                       files = {'filesUploaded': (f, file_obj)}
-                      resp = requests.post(upload_url, files=files)
+                      upload_resp = requests.post(upload_url, files=files)
                       
                       try:
-                          result = resp.json()
+                          result = upload_resp.json()
                           if result.get('status') == 'ok':
                               print(f\"Uploaded {f}: {result['data']['downloadPage']}\")
                           else:
