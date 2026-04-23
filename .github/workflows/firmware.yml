@@ -1,0 +1,65 @@
+name: Transfer File to Gofile
+
+on:
+  workflow_dispatch:
+    inputs:
+      ota_url:
+        description: 'Direct Download URL for the file'
+        required: true
+      downloader:
+        description: 'Choose download method'
+        required: true
+        default: 'aria2'
+        type: choice
+        options:
+          - aria2
+          - curl
+
+jobs:
+  download-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y aria2 jq curl
+
+      - name: Download File
+        run: |
+          if [ "${{ github.event.inputs.downloader }}" == "aria2" ]; then
+            echo "Downloading with aria2..."
+            aria2c -x 16 -s 16 -o "transfer_package.zip" "${{ github.event.inputs.ota_url }}"
+          else
+            echo "Downloading with curl..."
+            curl -L -o "transfer_package.zip" "${{ github.event.inputs.ota_url }}"
+          fi
+
+      - name: Upload to Gofile
+        run: |
+          # 1. Get the best available server
+          SERVER_RESPONSE=$(curl -s https://api.gofile.io/servers)
+          SERVER=$(echo $SERVER_RESPONSE | jq -r '.data.servers[0].name')
+          
+          if [ "$SERVER" == "null" ] || [ -z "$SERVER" ]; then
+            echo "❌ Error: Could not retrieve an active Gofile server."
+            exit 1
+          fi
+          
+          echo "Uploading to server: $SERVER"
+          
+          # 2. Upload the file
+          # We use the -# flag in curl to show a simple progress bar in the logs
+          UPLOAD_RESPONSE=$(curl -# -F "file=@transfer_package.zip" "https://$SERVER.gofile.io/contents/uploadFile")
+          
+          # 3. Parse and display result
+          DOWNLOAD_LINK=$(echo $UPLOAD_RESPONSE | jq -r '.data.downloadPage')
+          
+          if [ "$DOWNLOAD_LINK" != "null" ]; then
+            echo "------------------------------------------------"
+            echo "✅ Upload Complete!"
+            echo "Download Page: $DOWNLOAD_LINK"
+            echo "------------------------------------------------"
+          else
+            echo "❌ Upload failed. Response: $UPLOAD_RESPONSE"
+            exit 1
+          fi
