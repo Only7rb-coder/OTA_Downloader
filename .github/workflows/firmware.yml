@@ -1,4 +1,4 @@
-name: Transfer File to Gofile
+name: Upload Firmware to Gofile
 
 on:
   workflow_dispatch:
