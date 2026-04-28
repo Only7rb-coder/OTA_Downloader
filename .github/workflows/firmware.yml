@@ -23,7 +23,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y aria2 jq curl
-          # gdown handles the Google Drive virus scan interstitial pages
           pip install gdown
 
       - name: Download File
@@ -31,10 +30,10 @@ jobs:
         run: |
           URL="${{ github.event.inputs.ota_url }}"
           
-          # Check if URL is a Google Drive link
+          # 1. Handle Download
           if [[ "$URL" == *"drive.google.com"* ]]; then
             echo "Google Drive link detected. Using gdown..."
-            gdown "$URL" --fuzzy
+            gdown "$URL" --fuzzy --continue
           elif [ "${{ github.event.inputs.downloader }}" == "aria2" ]; then
             echo "Downloading with aria2..."
             aria2c -x 16 -s 16 "$URL"
@@ -43,8 +42,20 @@ jobs:
             curl -L -O -J "$URL"
           fi
           
-          # Identify the downloaded file
+          # 2. Identify the downloaded file
           FILENAME=$(ls -tp | grep -v / | head -n 1)
+          
+          # 3. CRITICAL: Check for Quota Exceeded error
+          # We check the file content. If it contains the Google error snippet, abort.
+          if grep -q "Quota exceeded" "$FILENAME" || grep -q "uc-error-caption" "$FILENAME"; then
+            echo "------------------------------------------------"
+            echo "❌ ERROR: Google Drive Quota Exceeded."
+            echo "The source file has hit the download limit. You must wait 24 hours"
+            echo "or mirror this file to a different hosting service."
+            echo "------------------------------------------------"
+            exit 1
+          fi
+          
           echo "file_name=$FILENAME" >> $GITHUB_OUTPUT
           echo "Detected Filename: $FILENAME"
 
