@@ -1,0 +1,89 @@
+name: Extract Xiaomi Fastboot Firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      rom_url:
+        description: 'Direct Download URL for the Fastboot .tgz ROM'
+        required: true
+      downloader:
+        description: 'Choose download method'
+        required: true
+        default: 'aria2'
+        type: choice
+        options:
+          - aria2
+          - curl
+
+jobs:
+  extract-and-upload:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          # Added tar to dependencies (usually pre-installed, but safe to include)
+          sudo apt-get install -y jq aria2 zip tar
+
+      - name: Process Fastboot ROM
+        run: |
+          mkdir -p workspace/extracted_images
+          cd workspace
+          
+          if [ "${{ github.event.inputs.downloader }}" == "aria2" ]; then
+            echo "Downloading with aria2..."
+            aria2c -x 16 -s 16 -o fastboot_rom.tgz "${{ github.event.inputs.rom_url }}"
+          else
+            echo "Downloading with curl..."
+            curl -L -o fastboot_rom.tgz "${{ github.event.inputs.rom_url }}"
+          fi
+          
+          echo "Extracting .tgz archive..."
+          tar -xzvf fastboot_rom.tgz
+          
+          # Find the images directory inside the extracted ROM folder
+          IMAGES_DIR=$(find . -type d -name "images" | head -n 1)
+          
+          if [ -d "$IMAGES_DIR" ]; then
+            echo "Copying target images..."
+            # Adjust the specific images you need here. 
+            # This copies boot, vbmeta, and init_boot if they exist.
+            cp "$IMAGES_DIR"/boot.img ./extracted_images/ 2>/dev/null || true
+            cp "$IMAGES_DIR"/vbmeta.img ./extracted_images/ 2>/dev/null || true
+            cp "$IMAGES_DIR"/init_boot.img ./extracted_images/ 2>/dev/null || true
+            
+            # Double check if we actually got anything
+            if [ -z "$(ls -A ./extracted_images)" ]; then
+              echo "Error: Targeted images (boot, vbmeta, init_boot) not found in the ROM."
+              exit 1
+            fi
+          else
+            echo "Error: 'images' directory not found in the extracted archive."
+            exit 1
+          fi
+
+      - name: Zip and Upload
+        run: |
+          # 1. Zip the images into one package
+          zip -j output_package.zip workspace/extracted_images/*.img
+          
+          # 2. Get available server
+          SERVER_RESPONSE=$(curl -s https://api.gofile.io/servers)
+          SERVER=$(echo $SERVER_RESPONSE | jq -r '.data.servers[0].name')
+          
+          echo "Uploading package to: $SERVER"
+          
+          # 3. Upload the single zip file
+          UPLOAD_RESPONSE=$(curl -s -F file=@output_package.zip "https://$SERVER.gofile.io/contents/uploadFile")
+          
+          # 4. Extract and print the link
+          DOWNLOAD_LINK=$(echo $UPLOAD_RESPONSE | jq -r '.data.downloadPage')
+          
+          echo "✅ Success: output_package.zip uploaded."
+          echo "Link: $DOWNLOAD_LINK"
+
