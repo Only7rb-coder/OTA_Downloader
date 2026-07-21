@@ -1,4 +1,4 @@
-name: Extract ik - preloader Xiaomi Fastboot
+name: Extract lk - preloader Xiaomi Fastboot
 
 on:
   workflow_dispatch:
