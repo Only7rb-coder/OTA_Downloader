@@ -51,22 +51,9 @@ jobs:
           if [ -f "$PAYLOAD_PATH" ]; then
             echo "Checking available partitions..."
             
-            # Python script stored securely in a variable to avoid YAML multi-line indent crashes
-            PYTHON_SCRIPT="import sys
-from payload_dumper import manifest_parser
-
-payload_path = sys.argv[1]
-with open(payload_path, 'rb') as f:
-    manifest = manifest_parser.parse(f)
-    partitions = [p.partition_name for p in manifest.partitions]
-    
-    target_list = ['boot', 'vbmeta', 'init_boot']
-    if 'vendor_boot' in partitions:
-        target_list.append('vendor_boot')
-        
-    print(','.join(target_list))"
-
-            DYNAMIC_PARTITIONS=$(python3 -c "$PYTHON_SCRIPT" "$PAYLOAD_PATH")
+            # Single-line Python script to completely avoid YAML indentation errors
+            DYNAMIC_PARTITIONS=$(python3 -c "import sys; from payload_dumper import manifest_parser; p = [x.partition_name for x in manifest_parser.parse(open(sys.argv[1], 'rb')).partitions]; t = ['boot', 'vbmeta', 'init_boot']; t.append('vendor_boot') if 'vendor_boot' in p else None; print(','.join(t))" "$PAYLOAD_PATH")
+            
             echo "Target partitions to dump: $DYNAMIC_PARTITIONS"
             
             echo "Dumping images..."
