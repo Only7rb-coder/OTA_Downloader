@@ -27,7 +27,6 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          # Added zip to dependencies
           sudo apt-get install -y python3-pip unzip jq aria2 zip
           pip3 install payload-dumper
 
@@ -50,8 +49,33 @@ jobs:
           PAYLOAD_PATH=$(find . -name "payload.bin" | head -n 1)
           
           if [ -f "$PAYLOAD_PATH" ]; then
+            echo "Checking available partitions..."
+            
+            # Use Python to check if vendor_boot exists in the payload, and build the partition list dynamically
+            PARTITIONS="boot,vbmeta,init_boot"
+            
+            PYTHON_SCRIPT=$(cat << 'EOF'
+import sys
+from payload_dumper import manifest_parser
+
+payload_path = sys.argv[1]
+with open(payload_path, 'rb') as f:
+    manifest = manifest_parser.parse(f)
+    partitions = [p.partition_name for p in manifest.partitions]
+    
+    target_list = ['boot', 'vbmeta', 'init_boot']
+    if 'vendor_boot' in partitions:
+        target_list.append('vendor_boot')
+        
+    print(','.join(target_list))
+EOF
+            )
+            
+            DYNAMIC_PARTITIONS=$(python3 -c "$PYTHON_SCRIPT" "$PAYLOAD_PATH")
+            echo "Target partitions to dump: $DYNAMIC_PARTITIONS"
+            
             echo "Dumping images..."
-            payload_dumper --out ./extracted_images --partitions boot,vendor_boot,vbmeta,init_boot "$PAYLOAD_PATH"
+            payload_dumper --out ./extracted_images --partitions "$DYNAMIC_PARTITIONS" "$PAYLOAD_PATH"
           else
             echo "Error: payload.bin not found."
             exit 1
@@ -59,8 +83,7 @@ jobs:
 
       - name: Zip and Upload
         run: |
-          # 1. Zip the images into one package
-          # -j flag keeps the zip structure flat (no directory inside the zip)
+          # 1. Zip the images into one package (-j flattens structure)
           zip -j output_package.zip workspace/extracted_images/*.img
           
           # 2. Get available server
