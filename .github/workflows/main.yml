@@ -49,15 +49,12 @@ jobs:
           PAYLOAD_PATH=$(find . -name "payload.bin" | head -n 1)
           
           if [ -f "$PAYLOAD_PATH" ]; then
-            echo "Checking available partitions..."
+            echo "Dumping core partitions (boot, vbmeta)..."
+            payload_dumper --out ./extracted_images --partitions boot,vbmeta "$PAYLOAD_PATH"
             
-            # Single-line Python script to completely avoid YAML indentation errors
-            DYNAMIC_PARTITIONS=$(python3 -c "import sys; from payload_dumper import manifest_parser; p = [x.partition_name for x in manifest_parser.parse(open(sys.argv[1], 'rb')).partitions]; t = ['boot', 'vbmeta', 'init_boot']; t.append('vendor_boot') if 'vendor_boot' in p else None; print(','.join(t))" "$PAYLOAD_PATH")
-            
-            echo "Target partitions to dump: $DYNAMIC_PARTITIONS"
-            
-            echo "Dumping images..."
-            payload_dumper --out ./extracted_images --partitions "$DYNAMIC_PARTITIONS" "$PAYLOAD_PATH"
+            echo "Attempting optional partitions..."
+            payload_dumper --out ./extracted_images --partitions init_boot "$PAYLOAD_PATH" || echo "init_boot not present in payload, skipping."
+            payload_dumper --out ./extracted_images --partitions vendor_boot "$PAYLOAD_PATH" || echo "vendor_boot not present in payload, skipping."
           else
             echo "Error: payload.bin not found."
             exit 1
