@@ -70,10 +70,14 @@ jobs:
             --connect-timeout=30 \
             --continue=true \
             --console-log-level=notice \
+            --disk-cache=64M \
+            --enable-http-pipelining=true \
             --file-allocation=none \
             --max-connection-per-server=16 \
-            --max-tries=10 \
-            --min-split-size=10M \
+            --max-concurrent-downloads=1 \
+            --max-tries=20 \
+            --min-split-size=4M \
+            --optimize-concurrent-downloads=true \
             --out=ota_images.tar.zst \
             --dir=workspace \
             --retry-wait=5 \
@@ -110,9 +114,12 @@ jobs:
           OUTPUT_DIR="$PWD/workspace/extracted_images"
           export OUTPUT_DIR
 
-          # Stream the compressed tar archive and select exact member names, even
-          # when they are nested below a device/version directory. This avoids
-          # unpacking the complete archive onto the runner disk.
+          # Stream the compressed tar archive and select boot-named members,
+          # even when they are nested below a device/version directory. This
+          # avoids unpacking the complete archive onto the runner disk. Select
+          # all *boot.img members in one pass; the command writes only exact
+          # boot.img and init_boot.img basenames, so a missing init_boot.img
+          # does not make tar fail.
           tar \
             --use-compress-program='zstd -d -q' \
             --extract \
@@ -126,7 +133,7 @@ jobs:
               */boot.img|boot.img) cat > "$OUTPUT_DIR/boot.img" ;;
               */init_boot.img|init_boot.img) cat > "$OUTPUT_DIR/init_boot.img" ;;
             esac' \
-            -- boot.img init_boot.img
+            -- '*boot.img'
 
           found=0
           for image in boot.img init_boot.img; do
