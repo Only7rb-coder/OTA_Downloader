@@ -30,7 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y curl file tar zstd zip
+          sudo apt-get install --no-install-recommends -y aria2 curl file tar zstd zip
 
       - name: Download OTA image archive
         run: |
@@ -42,15 +42,58 @@ jobs:
             exit 1
           fi
 
-          curl \
+          # SourceForge's download endpoint can return 403 to aria2 during the
+          # redirect step. Resolve its signed mirror URL with curl first, then
+          # give that final URL to aria2 for parallel ranged connections.
+          DOWNLOAD_URL="$OTA_URL"
+          if ! DOWNLOAD_URL=$(curl \
             --fail \
+            --silent \
+            --show-error \
             --location \
+            --head \
+            --max-redirs 10 \
             --retry 5 \
             --retry-delay 5 \
             --retry-all-errors \
-            --continue-at - \
-            --output workspace/ota_images.tar.zst \
-            "$OTA_URL"
+            --user-agent 'Mozilla/5.0' \
+            --output /dev/null \
+            --write-out '%{url_effective}' \
+            "$OTA_URL"); then
+            echo "Could not resolve a final download URL; aria2 will try the original URL."
+          fi
+
+          if ! aria2c \
+            --allow-overwrite=false \
+            --auto-file-renaming=false \
+            --check-certificate=true \
+            --connect-timeout=30 \
+            --continue=true \
+            --console-log-level=notice \
+            --file-allocation=none \
+            --max-connection-per-server=16 \
+            --max-tries=10 \
+            --min-split-size=10M \
+            --out=ota_images.tar.zst \
+            --dir=workspace \
+            --retry-wait=5 \
+            --split=16 \
+            --summary-interval=10 \
+            --timeout=30 \
+            --user-agent='Mozilla/5.0' \
+            --referer="$OTA_URL" \
+            "$DOWNLOAD_URL"; then
+            echo "aria2c could not complete the download; retrying with curl."
+            curl \
+              --fail \
+              --location \
+              --retry 5 \
+              --retry-delay 5 \
+              --retry-all-errors \
+              --continue-at - \
+              --output workspace/ota_images.tar.zst \
+              "$OTA_URL"
+          fi
 
           if ! file workspace/ota_images.tar.zst | grep -Eiq 'zstandard|zstd'; then
             echo "Downloaded file is not recognized as a Zstandard archive:"

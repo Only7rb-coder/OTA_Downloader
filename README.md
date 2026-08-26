@@ -12,7 +12,7 @@ For example:
 https://sourceforge.net/projects/rama982/files/OTA-EXTRACT/X6885-15.1.2.180-OP001PF001AZ-images.tar.zst/download
 ```
 
-The workflow follows redirects, downloads the archive with retry and resume support, and streams the compressed tar file through Zstandard. It extracts only members named `boot.img` and `init_boot.img`, including when they are nested inside device or version directories, so it does not unpack the complete archive onto the runner.
+The workflow follows redirects and downloads the archive with `aria2c` using up to 16 parallel connections and ranged segments when the SourceForge mirror supports them. It retries and resumes interrupted downloads, falls back to `curl` if aria2 cannot complete the transfer, and streams the compressed tar file through Zstandard. It extracts only members named `boot.img` and `init_boot.img`, including when they are nested inside device or version directories, so it does not unpack the complete archive onto the runner.
 
 The completed run publishes a short-lived artifact containing any images found, a `sha256sums.txt` checksum file, and a ZIP package named from the `output_name` input. If the archive contains neither target image, the workflow fails clearly instead of publishing an empty result. The `init_boot.img` partition is optional; an archive containing only `boot.img` is still accepted.
 
