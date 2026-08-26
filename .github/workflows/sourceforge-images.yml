@@ -30,7 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y aria2 curl file tar zstd zip
+          sudo apt-get install --no-install-recommends -y aria2 curl file jq tar zstd zip
 
       - name: Download OTA image archive
         run: |
@@ -174,3 +174,47 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
+
+      - name: Upload output files to Gofile
+        env:
+          GOFILE_SERVER_API: https://api.gofile.io/servers
+          GOFILE_UPLOAD_URL_SUFFIX: .gofile.io/contents/uploadFile
+        run: |
+          set -euo pipefail
+
+          server_response=$(curl \
+            --fail \
+            --silent \
+            --show-error \
+            --retry 5 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            "$GOFILE_SERVER_API")
+          server=$(jq -er '.data.servers[0].name' <<<"$server_response")
+          upload_url="https://${server}${GOFILE_UPLOAD_URL_SUFFIX}"
+
+          upload_file() {
+            local file="$1"
+            local response
+            local link
+
+            echo "Uploading $file to $upload_url"
+            response=$(curl \
+              --fail \
+              --silent \
+              --show-error \
+              --retry 5 \
+              --retry-delay 5 \
+              --retry-all-errors \
+              -F "file=@${file}" \
+              "$upload_url")
+            link=$(jq -er '.data.downloadPage' <<<"$response")
+
+            echo "Gofile link for $(basename "$file"): $link"
+            printf -- '- `%s`: %s\n' "$(basename "$file")" "$link" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          upload_file "${OUTPUT_NAME}.zip"
+          for image in workspace/extracted_images/*.img; do
+            [[ -f "$image" ]] && upload_file "$image"
+          done
