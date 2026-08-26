@@ -1,0 +1,126 @@
+name: Extract boot and init_boot images
+
+on:
+  workflow_dispatch:
+    inputs:
+      ota_url:
+        description: 'SourceForge or direct URL for a .tar.zst OTA image archive'
+        required: true
+        type: string
+      output_name:
+        description: 'Artifact name (letters, numbers, dot, underscore, and hyphen only)'
+        required: false
+        default: ota-boot-images
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  extract-images:
+    name: Download and extract boot images
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      OTA_URL: ${{ inputs.ota_url }}
+      OUTPUT_NAME: ${{ inputs.output_name }}
+
+    steps:
+      - name: Install archive tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y curl file tar zstd zip
+
+      - name: Download OTA image archive
+        run: |
+          set -euo pipefail
+          mkdir -p workspace
+
+          if [[ ! "$OTA_URL" =~ ^https:// ]]; then
+            echo "OTA URL must use HTTPS."
+            exit 1
+          fi
+
+          curl \
+            --fail \
+            --location \
+            --retry 5 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            --continue-at - \
+            --output workspace/ota_images.tar.zst \
+            "$OTA_URL"
+
+          if ! file workspace/ota_images.tar.zst | grep -Eiq 'zstandard|zstd'; then
+            echo "Downloaded file is not recognized as a Zstandard archive:"
+            file workspace/ota_images.tar.zst
+            exit 1
+          fi
+
+          echo "Downloaded archive: $(du -h workspace/ota_images.tar.zst | cut -f1)"
+
+      - name: Extract boot.img and init_boot.img
+        run: |
+          set -euo pipefail
+          mkdir -p workspace/extracted_images
+          OUTPUT_DIR="$PWD/workspace/extracted_images"
+          export OUTPUT_DIR
+
+          # Stream the compressed tar archive and select exact member names, even
+          # when they are nested below a device/version directory. This avoids
+          # unpacking the complete archive onto the runner disk.
+          tar \
+            --use-compress-program='zstd -d -q' \
+            --extract \
+            --file workspace/ota_images.tar.zst \
+            --directory workspace/extracted_images \
+            --wildcards \
+            --no-anchored \
+            --no-same-owner \
+            --no-same-permissions \
+            --to-command='case "$TAR_FILENAME" in
+              */boot.img|boot.img) cat > "$OUTPUT_DIR/boot.img" ;;
+              */init_boot.img|init_boot.img) cat > "$OUTPUT_DIR/init_boot.img" ;;
+            esac' \
+            -- boot.img init_boot.img
+
+          found=0
+          for image in boot.img init_boot.img; do
+            if [[ -s "workspace/extracted_images/$image" ]]; then
+              printf '%s: %s\n' "$image" "$(du -h "workspace/extracted_images/$image" | cut -f1)"
+              found=$((found + 1))
+            else
+              echo "Warning: $image was not found in the archive."
+            fi
+          done
+
+          if [[ "$found" -eq 0 ]]; then
+            echo "Neither boot.img nor init_boot.img was found in the archive."
+            exit 1
+          fi
+
+      - name: Package extracted images
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$OUTPUT_NAME" || ! "$OUTPUT_NAME" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "output_name may contain only letters, numbers, dot, underscore, and hyphen."
+            exit 1
+          fi
+
+          cd workspace/extracted_images
+          sha256sum *.img > sha256sums.txt
+          zip -9 "../../${OUTPUT_NAME}.zip" *.img sha256sums.txt
+
+      - name: Upload extracted images
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.output_name }}
+          path: |
+            workspace/extracted_images/*.img
+            workspace/extracted_images/sha256sums.txt
+            ${{ inputs.output_name }}.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
